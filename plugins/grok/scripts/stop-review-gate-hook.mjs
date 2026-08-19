@@ -53,12 +53,38 @@ function filterJobsForCurrentSession(jobs, input = {}) {
   return jobs.filter((job) => job.claudeSessionId === sessionId);
 }
 
-function buildStopReviewPrompt(input = {}) {
+function collectRepoStateBlock(cwd) {
+  const runGit = (args) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8", timeout: 10_000, windowsHide: true });
+    if (result.error || result.status !== 0) {
+      return null;
+    }
+    return result.stdout.trimEnd();
+  };
+  const status = runGit(["status", "--short", "--untracked-files=all"]);
+  if (status === null) {
+    return "";
+  }
+  const stat = runGit(["diff", "--stat"]) ?? "";
+  const stagedStat = runGit(["diff", "--stat", "--cached"]) ?? "";
+  return [
+    "Repository state at stop time (captured by the plugin, read-only):",
+    "git status --short --untracked-files=all:",
+    status || "(clean)",
+    "git diff --stat:",
+    stat || "(no unstaged changes)",
+    "git diff --stat --cached:",
+    stagedStat || "(no staged changes)"
+  ].join("\n");
+}
+
+function buildStopReviewPrompt(input = {}, cwd = process.cwd()) {
   const lastAssistantMessage = String(input.last_assistant_message ?? "").trim();
   const template = loadPromptTemplate(ROOT_DIR, "stop-review-gate");
   const claudeResponseBlock = lastAssistantMessage ? ["Previous Claude response:", lastAssistantMessage].join("\n") : "";
   return interpolateTemplate(template, {
-    CLAUDE_RESPONSE_BLOCK: claudeResponseBlock
+    CLAUDE_RESPONSE_BLOCK: claudeResponseBlock,
+    REPO_STATE_BLOCK: collectRepoStateBlock(cwd)
   });
 }
 
@@ -81,13 +107,15 @@ function parseStopReviewOutput(rawOutput) {
     };
   }
 
-  const firstLine = text.split(/\r?\n/, 1)[0].trim();
-  if (firstLine.startsWith("ALLOW:")) {
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  const decisionIndex = lines.findIndex((line) => line.startsWith("ALLOW:") || line.startsWith("BLOCK:"));
+  const decisionLine = decisionIndex === -1 ? "" : lines[decisionIndex];
+  if (decisionLine.startsWith("ALLOW:")) {
     return { ok: true, reason: null };
   }
-  if (firstLine.startsWith("BLOCK:")) {
-    const reason = firstLine.slice("BLOCK:".length).trim() || text;
-    const detail = text.split(/\r?\n/).slice(1).join("\n").trim();
+  if (decisionLine.startsWith("BLOCK:")) {
+    const reason = decisionLine.slice("BLOCK:".length).trim() || text;
+    const detail = lines.slice(decisionIndex + 1).join("\n").trim();
     return {
       ok: false,
       reason: `Grok stop-time review found issues that still need fixes before ending the turn: ${reason}${detail ? `\n${detail}` : ""}`
@@ -102,7 +130,7 @@ function parseStopReviewOutput(rawOutput) {
 
 function runStopReview(cwd, input = {}) {
   const scriptPath = path.join(SCRIPT_DIR, "grok-companion.mjs");
-  const prompt = buildStopReviewPrompt(input);
+  const prompt = buildStopReviewPrompt(input, cwd);
   const childEnv = {
     ...process.env,
     ...(input.session_id ? { [SESSION_ID_ENV]: input.session_id } : {})
@@ -134,7 +162,8 @@ function runStopReview(cwd, input = {}) {
 
   try {
     const payload = JSON.parse(result.stdout);
-    return parseStopReviewOutput(payload?.rawOutput);
+    // Grok writes a preamble before acting; the decision line lives in the final message.
+    return parseStopReviewOutput(payload?.finalSegment ?? payload?.rawOutput);
   } catch {
     return {
       ok: false,

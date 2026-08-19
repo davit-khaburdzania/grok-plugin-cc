@@ -591,6 +591,7 @@ async function executeTaskRun(request) {
     sandbox,
     write,
     rawOutput,
+    finalSegment: result.textSegments?.length ? result.textSegments[result.textSegments.length - 1] : rawOutput,
     touchedFiles: result.touchedFiles,
     commandExecutions: result.commandExecutions,
     reasoningSummary: result.reasoningSummary,

@@ -121,8 +121,10 @@ export function saveState(cwd, state) {
       continue;
     }
     removeFileIfExists(resolveJobFile(cwd, job.id));
+    removeFileIfExists(resolveJobLogFile(cwd, job.id));
+    removeFileIfExists(resolveJobContextFile(cwd, job.id));
+    removeFileIfExists(resolveJobPromptFile(cwd, job.id));
     removeFileIfExists(job.logFile);
-    removeFileIfExists(job.contextFile);
   }
 
   fs.writeFileSync(resolveStateFile(cwd), `${JSON.stringify(nextState, null, 2)}\n`, "utf8");

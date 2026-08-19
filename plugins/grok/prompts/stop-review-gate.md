@@ -9,6 +9,8 @@ If the previous Claude turn was only a status update, a summary, a setup/login c
 Challenge whether that specific work and its design choices should ship.
 
 {{CLAUDE_RESPONSE_BLOCK}}
+
+{{REPO_STATE_BLOCK}}
 </task>
 
 <environment>
@@ -26,7 +28,7 @@ After the first line, list the concrete issues (file, line, what is wrong) when 
 
 <default_follow_through_policy>
 Use ALLOW if the previous turn did not make code changes or if you do not see a blocking issue.
-Use ALLOW immediately, without extra investigation, if the previous turn was not an edit-producing turn.
+Use ALLOW immediately, without extra investigation or tool calls, if the previous turn was not an edit-producing turn or the repository state above shows no changes.
 Use BLOCK only if the previous turn made code changes and you found something that still needs to be fixed before stopping.
 </default_follow_through_policy>
 
