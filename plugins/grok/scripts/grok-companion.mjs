@@ -563,6 +563,10 @@ async function executeTaskRun(request) {
   const { sandbox, write } = resolveTaskSandbox(request, previousJob);
   if (request.jobId) {
     upsertJob(workspaceRoot, { id: request.jobId, sandbox, write });
+    const storedJob = readStoredJob(workspaceRoot, request.jobId);
+    if (storedJob) {
+      writeJobFile(workspaceRoot, request.jobId, { ...storedJob, sandbox, write });
+    }
   }
 
   const prompt = request.prompt?.trim() || (previousJob ? DEFAULT_CONTINUE_PROMPT : "");
