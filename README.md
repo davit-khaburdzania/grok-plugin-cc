@@ -8,6 +8,7 @@ This plugin is for Claude Code users who want to call xAI's Grok coding agent fr
 
 - `/grok:review` for a read-only Grok code review with structured findings
 - `/grok:adversarial-review` for a steerable challenge review of the design and assumptions
+- `/grok:implement` for the "Claude plans, Grok implements" loop: Claude writes the plan, Grok does the work, Claude verifies
 - `/grok:rescue`, `/grok:transfer`, `/grok:status`, `/grok:result`, `/grok:transcript`, and `/grok:cancel` to delegate work, hand off sessions, and manage background jobs
 - `/grok:setup` to check the Grok CLI, authentication, available models, and the optional stop-time review gate
 
@@ -136,6 +137,42 @@ Examples:
 
 This command is read-only.
 It does not fix code.
+
+### `/grok:implement`
+
+Runs the plan-big, execute-small loop with Grok as the worker.
+Claude investigates the repository and writes a concrete plan (goal, context, numbered steps with file paths, out-of-scope list, verification commands, acceptance criteria).
+Grok implements the plan in a write-capable session.
+Claude waits for the job, reads Grok's report, inspects the diff, reruns the verification commands, and reports.
+If verification fails, Claude sends concise follow-up instructions to the same Grok session (at most two rounds) instead of patching the code itself.
+
+Use it when you want:
+
+- Claude's context and judgment for the plan and the review, and Grok's hands for the edits
+- a bounded worker run with an explicit report (Summary, Changes, Verification, Deviations, Notes for the planner)
+- follow-up rounds that stay in the same Grok session
+
+Examples:
+
+```bash
+/grok:implement add retry with exponential backoff to fetchUser and cover it with tests
+/grok:implement --background migrate the settings page to the new form component
+/grok:implement --resume also handle the empty-list case in the new endpoint
+/grok:implement --verify-only impl-abc123
+/grok:implement --model grok-4.5 --no-subagents extract the date helpers into src/lib/date.ts
+```
+
+Flags:
+
+- `--wait` (default) launches Grok in the background, polls `/grok:status` style until it finishes, then verifies.
+- `--background` launches only. Check with `/grok:status <job-id>` and verify later with `/grok:implement --verify-only <job-id>`.
+- `--resume` sends follow-up instructions to the latest Grok implement session; `--fresh` forces a new session.
+- `--no-verify` skips Claude's verification step.
+- `--model`, `--effort`, and `--no-subagents` pass through to Grok.
+
+Grok runs with the `workspace` sandbox, so edits stay inside the repository.
+Grok does not commit unless the plan says so.
+The helper behind this command is `grok-companion.mjs implement`; it stores the plan next to the job (`<job-id>.plan.md`) and accepts the plan on stdin, as text, or via `--plan-file`.
 
 ### `/grok:rescue`
 
@@ -286,6 +323,12 @@ If that review finds issues, the stop is blocked so Claude can address them firs
 /grok:rescue investigate why the build is failing in CI
 ```
 
+### Let Claude Plan And Grok Build
+
+```bash
+/grok:implement add a --dry-run flag to the deploy script and document it
+```
+
 ### Start Something Long-Running
 
 ```bash
@@ -310,7 +353,7 @@ It uses the global `grok` binary installed in your environment (`$GROK_PLUGIN_BI
 | --- | --- |
 | Progress in `/grok:status` | `streaming-json` tool call events |
 | Read-only reviews | `--tools read_file,list_dir,grep` and `--sandbox read-only` |
-| Write-capable rescue | `--sandbox workspace` |
+| Write-capable rescue and implement | `--sandbox workspace` |
 | Follow-up on a task | `--resume <session-id>` |
 | Known session ID while running | `--session-id <uuid>` |
 | `/grok:transcript` | `grok export <session-id>` |

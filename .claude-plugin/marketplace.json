@@ -5,20 +5,26 @@
   },
   "metadata": {
     "description": "Grok Build plugin for Claude Code: delegate tasks to Grok and run Grok code reviews.",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "plugins": [
     {
       "name": "grok",
       "description": "Use Grok Build from Claude Code to review code or delegate tasks.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": {
         "name": "Davit Khaburdzania"
       },
       "homepage": "https://github.com/davit-khaburdzania/grok-plugin-cc",
       "repository": "https://github.com/davit-khaburdzania/grok-plugin-cc",
       "license": "Apache-2.0",
-      "keywords": ["grok", "grok-build", "xai", "code-review", "delegation"],
+      "keywords": [
+        "grok",
+        "grok-build",
+        "xai",
+        "code-review",
+        "delegation"
+      ],
       "category": "development",
       "source": "./plugins/grok"
     }

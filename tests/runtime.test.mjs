@@ -326,3 +326,113 @@ test("review fails cleanly outside a git repository", () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /must run inside a Git repository/);
 });
+
+const IMPLEMENT_REPORT = [
+  "## Summary",
+  "Added the helper.",
+  "## Changes",
+  "- calc.js: added clamp",
+  "## Verification",
+  "- node --test: passed",
+  "## Deviations",
+  "None",
+  "## Notes for the planner",
+  "None"
+].join("\n");
+
+test("implement wraps the plan in the worker prompt, runs write-capable, and records an implement job", () => {
+  const { repo, env, binDir, dataDir } = setupFixture({ sessionId: "claude-impl" });
+  const plan = "# Plan: Add clamp helper\n\n## Steps\n1. calc.js: add clamp\n\n## Verification\n- node --test";
+  const result = companion(["implement", "--verify", "node --test", "--no-subagents", "-"], {
+    cwd: repo,
+    env: { ...env, ...scenarioEnv({ response: IMPLEMENT_REPORT, numTurns: 4 }) },
+    input: plan
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /## Summary\nAdded the helper\./);
+  assert.match(result.stdout, /Usage: 1,050 tokens, 4 turns/);
+
+  const [invocation] = headlessInvocations(binDir);
+  assert.equal(invocation.sandbox, "workspace");
+  assert.equal(invocation.resume, false);
+  assert.match(invocation.prompt, /implementation worker for a plan written by Claude Code/);
+  assert.match(invocation.prompt, /<plan>\n# Plan: Add clamp helper/);
+  assert.match(invocation.prompt, /Do not spawn subagents/);
+  assert.match(invocation.prompt, /<planner_verification_commands>[\s\S]*- node --test/);
+  assert.match(invocation.prompt, /## Notes for the planner/);
+
+  const status = JSON.parse(companion(["status", "--json"], { cwd: repo, env }).stdout);
+  const job = status.latestFinished;
+  assert.equal(job.kind, "implement");
+  assert.equal(job.kindLabel, "implement");
+  assert.equal(job.title, "Grok Implement");
+  assert.match(job.id, /^impl-/);
+  assert.equal(job.write, true);
+  assert.match(job.summary, /^Add clamp helper: Added the helper\./);
+
+  const planFiles = fs.readdirSync(path.join(dataDir, "state")).flatMap((dir) =>
+    fs.readdirSync(path.join(dataDir, "state", dir, "jobs")).filter((file) => file.endsWith(".plan.md"))
+  );
+  assert.equal(planFiles.length, 1);
+});
+
+test("implement accepts --plan-file and --title, and requires a plan", () => {
+  const { repo, env, binDir } = setupFixture();
+  const planFile = path.join(repo, "plan.md");
+  fs.writeFileSync(planFile, "1. do the thing\n", "utf8");
+  let result = companion(["implement", "--plan-file", planFile, "--title", "Do the thing"], {
+    cwd: repo,
+    env: { ...env, ...scenarioEnv({ response: IMPLEMENT_REPORT }) }
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const [invocation] = headlessInvocations(binDir);
+  assert.match(invocation.prompt, /<plan>\n1\. do the thing/);
+  const status = JSON.parse(companion(["status", "--json"], { cwd: repo, env }).stdout);
+  assert.match(status.latestFinished.summary, /^Do the thing: /);
+
+  result = companion(["implement"], { cwd: repo, env: { ...env, ...scenarioEnv({ response: IMPLEMENT_REPORT }) }, input: "" });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Provide the plan as text, via --plan-file <path>, or on stdin\./);
+});
+
+test("implement --resume-last sends follow-up instructions to the same Grok session", () => {
+  const { repo, env, binDir } = setupFixture({ sessionId: "claude-impl-resume" });
+  let result = companion(["implement", "# Plan: First pass\n1. step"], {
+    cwd: repo,
+    env: { ...env, ...scenarioEnv({ response: IMPLEMENT_REPORT }) }
+  });
+  assert.equal(result.status, 0, result.stderr);
+  result = companion(["implement", "--resume-last", "--title", "Fix the test", "Add the missing NaN test and rerun node --test"], {
+    cwd: repo,
+    env: { ...env, ...scenarioEnv({ response: IMPLEMENT_REPORT }) }
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const [first, second] = headlessInvocations(binDir);
+  assert.equal(second.resume, true);
+  assert.equal(second.sessionId, first.sessionId);
+  assert.equal(second.sandbox, null);
+  assert.match(second.prompt, /follow-up instructions below/);
+  assert.match(second.prompt, /<followup_instructions>\nAdd the missing NaN test/);
+  const status = JSON.parse(companion(["status", "--json"], { cwd: repo, env }).stdout);
+  assert.equal(status.latestFinished.title, "Grok Implement Follow-up");
+  assert.match(status.latestFinished.summary, /^Fix the test: /);
+});
+
+test("implement --background enqueues a worker and prints polling hints", async () => {
+  const { repo, env, dataDir } = setupFixture({ sessionId: "claude-impl-bg" });
+  const result = companion(["implement", "--background", "--title", "Background plan", "1. step"], {
+    cwd: repo,
+    env: { ...env, ...scenarioEnv({ response: IMPLEMENT_REPORT }) }
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Grok Implement \(Background plan\) started in the background as impl-\S+\. Poll with `status impl-\S+ --wait`/);
+  const jobId = result.stdout.match(/as (impl-[^\s.]+)\./)[1];
+  const waited = companion(["status", jobId, "--wait", "--timeout-ms", "15000", "--json"], { cwd: repo, env });
+  assert.equal(waited.status, 0, waited.stderr);
+  const snapshot = JSON.parse(waited.stdout);
+  assert.equal(snapshot.job.status, "completed");
+  assert.equal(snapshot.job.kindLabel, "implement");
+  const fetched = companion(["result", jobId], { cwd: repo, env });
+  assert.match(fetched.stdout, /## Summary\nAdded the helper\./);
+  assert.ok(fs.existsSync(path.join(dataDir, "state")));
+});

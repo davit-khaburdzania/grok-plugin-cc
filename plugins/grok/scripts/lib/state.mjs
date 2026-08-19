@@ -124,6 +124,7 @@ export function saveState(cwd, state) {
     removeFileIfExists(resolveJobLogFile(cwd, job.id));
     removeFileIfExists(resolveJobContextFile(cwd, job.id));
     removeFileIfExists(resolveJobPromptFile(cwd, job.id));
+    removeFileIfExists(resolveJobPlanFile(cwd, job.id));
     removeFileIfExists(job.logFile);
   }
 
@@ -208,4 +209,9 @@ export function resolveJobContextFile(cwd, jobId) {
 export function resolveJobPromptFile(cwd, jobId) {
   ensureStateDir(cwd);
   return path.join(resolveJobsDir(cwd), `${jobId}.prompt.md`);
+}
+
+export function resolveJobPlanFile(cwd, jobId) {
+  ensureStateDir(cwd);
+  return path.join(resolveJobsDir(cwd), `${jobId}.plan.md`);
 }

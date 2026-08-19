@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+- Add `/grok:implement`: Claude writes a concrete plan, Grok implements it as a write-capable worker, Claude waits, verifies the diff and the plan's commands, and sends follow-ups to the same Grok session when needed.
+- Add the `implement` helper subcommand (`--plan-file`, stdin, `--verify`, `--title`, `--no-subagents`, `--resume-last`, `--background`) and the `implement` job kind in `/grok:status`.
+- Task summaries skip Markdown headings so `/grok:status` shows the first real sentence of Grok's report.
+
 ## 0.1.0
 
 - Initial version of the Grok Build plugin for Claude Code.

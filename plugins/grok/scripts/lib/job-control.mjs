@@ -38,6 +38,9 @@ function getJobTypeLabel(job) {
   if (job.kind === "transfer") {
     return "transfer";
   }
+  if (job.kind === "implement") {
+    return "implement";
+  }
   if (job.jobClass === "review" || job.kind === "review") {
     return "review";
   }

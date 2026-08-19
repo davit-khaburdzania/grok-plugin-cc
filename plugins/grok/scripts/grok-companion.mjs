@@ -55,6 +55,7 @@ import {
   getConfig,
   listJobs,
   resolveJobContextFile,
+  resolveJobPlanFile,
   resolveJobPromptFile,
   setConfig,
   upsertJob,
@@ -87,6 +88,7 @@ function printUsage() {
       "  node scripts/grok-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <effort>] [focus text]",
       "  node scripts/grok-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <effort>] [focus text]",
       "  node scripts/grok-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh|max>] [--sandbox <off|workspace|read-only|strict|profile>] [--max-turns <n>] [prompt]",
+      "  node scripts/grok-companion.mjs implement [--background] [--resume-last|--fresh] [--model <model>] [--effort <effort>] [--sandbox <profile>] [--max-turns <n>] [--title <title>] [--no-subagents] [--plan-file <path> | plan text | stdin]",
       "  node scripts/grok-companion.mjs transfer [--source <claude-jsonl>] [--model <model>] [--effort <effort>] [--json]",
       "  node scripts/grok-companion.mjs status [job-id] [--all] [--wait] [--timeout-ms <ms>] [--json]",
       "  node scripts/grok-companion.mjs result [job-id] [--json]",
@@ -175,7 +177,7 @@ function firstMeaningfulLine(text, fallback) {
   const line = String(text ?? "")
     .split(/\r?\n/)
     .map((value) => value.trim())
-    .find(Boolean);
+    .find((value) => value && !/^#{1,6}\s/.test(value) && !/^```/.test(value));
   return line ?? fallback;
 }
 
@@ -268,7 +270,8 @@ function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summ
   return createJobRecord({
     id: generateJobId(prefix),
     kind,
-    kindLabel: kind === "adversarial-review" ? "adversarial-review" : jobClass === "review" ? "review" : "rescue",
+    kindLabel:
+      kind === "adversarial-review" ? "adversarial-review" : kind === "implement" ? "implement" : jobClass === "review" ? "review" : "rescue",
     title,
     workspaceRoot,
     jobClass,
@@ -492,7 +495,13 @@ async function handleReviewCommand(argv, config) {
 // task
 // ---------------------------------------------------------------------------
 
-function buildTaskRunMetadata({ prompt, resumeLast = false }) {
+function buildTaskRunMetadata({ prompt, resumeLast = false, title = null, summary = null }) {
+  if (title) {
+    return {
+      title,
+      summary: summary ?? shorten(prompt || title)
+    };
+  }
   if (!resumeLast && String(prompt ?? "").includes(STOP_REVIEW_TASK_MARKER)) {
     return {
       title: "Grok Stop Gate Review",
@@ -500,11 +509,11 @@ function buildTaskRunMetadata({ prompt, resumeLast = false }) {
     };
   }
 
-  const title = resumeLast ? "Grok Resume" : "Grok Task";
+  const defaultTitle = resumeLast ? "Grok Resume" : "Grok Task";
   const fallbackSummary = resumeLast ? DEFAULT_CONTINUE_PROMPT : "Task";
   return {
-    title,
-    summary: shorten(prompt || fallbackSummary)
+    title: defaultTitle,
+    summary: summary ?? shorten(prompt || fallbackSummary)
   };
 }
 
@@ -534,7 +543,9 @@ async function executeTaskRun(request) {
 
   const taskMetadata = buildTaskRunMetadata({
     prompt: request.prompt,
-    resumeLast: request.resumeLast
+    resumeLast: request.resumeLast,
+    title: request.title ?? null,
+    summary: request.summary ?? null
   });
 
   let previousJob = null;
@@ -606,20 +617,26 @@ async function executeTaskRun(request) {
     usage: buildUsageRecord(result),
     payload,
     rendered,
-    summary: firstMeaningfulLine(
-      result.textSegments?.length ? result.textSegments[result.textSegments.length - 1] : rawOutput,
-      firstMeaningfulLine(failureMessage, `${taskMetadata.title} finished.`)
-    ),
+    summary: buildTaskSummary(request, result, rawOutput, failureMessage, taskMetadata),
     jobTitle: taskMetadata.title,
     jobClass: "task",
     write
   };
 }
 
+function buildTaskSummary(request, result, rawOutput, failureMessage, taskMetadata) {
+  const finalSegment = result.textSegments?.length ? result.textSegments[result.textSegments.length - 1] : rawOutput;
+  const outcome = firstMeaningfulLine(finalSegment, firstMeaningfulLine(failureMessage, `${taskMetadata.title} finished.`));
+  if (request.summary) {
+    return shorten(`${request.summary}: ${outcome}`, 160);
+  }
+  return outcome;
+}
+
 function buildTaskJob(workspaceRoot, taskMetadata, request) {
   return createCompanionJob({
-    prefix: "task",
-    kind: "task",
+    prefix: request.kind === "implement" ? "impl" : "task",
+    kind: request.kind ?? "task",
     title: taskMetadata.title,
     workspaceRoot,
     jobClass: "task",
@@ -635,6 +652,121 @@ function buildTaskJob(workspaceRoot, taskMetadata, request) {
 
 function renderQueuedTaskLaunch(payload) {
   return `${payload.title} started in the background as ${payload.jobId}. Check /grok:status ${payload.jobId} for progress and /grok:result ${payload.jobId} when it finishes.\n`;
+}
+
+// ---------------------------------------------------------------------------
+// implement (Claude plans, Grok implements)
+// ---------------------------------------------------------------------------
+
+function derivePlanTitle(plan) {
+  const lines = String(plan ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const heading = lines.find((line) => /^#{1,6}\s+\S/.test(line));
+  const candidate = (heading ?? lines[0] ?? "").replace(/^#{1,6}\s+/, "").replace(/^(plan|implementation plan)\s*[:-]\s*/i, "");
+  return shorten(candidate || "Implementation plan", 72);
+}
+
+function readPlanInput(cwd, options, positionals) {
+  if (options["plan-file"]) {
+    return fs.readFileSync(path.resolve(cwd, options["plan-file"]), "utf8");
+  }
+  const positionalText = positionals.join(" ").trim();
+  if (positionalText && positionalText !== "-") {
+    return positionalText;
+  }
+  return readStdinIfPiped();
+}
+
+function buildImplementPrompt(plan, options = {}) {
+  const template = loadPromptTemplate(ROOT_DIR, options.followUp ? "implement-followup" : "implement");
+  const extraBlocks = [];
+  if (options.verifyCommands?.length) {
+    extraBlocks.push(
+      ["<planner_verification_commands>", "The planner will run these commands after you finish; make sure they pass:", ...options.verifyCommands.map((command) => `- ${command}`), "</planner_verification_commands>"].join("\n")
+    );
+  }
+  return interpolateTemplate(template, {
+    PLAN: String(plan).trim(),
+    SUBAGENT_RULE: options.noSubagents ? "- Do not spawn subagents. Do the work in this session." : "",
+    EXTRA_BLOCK: extraBlocks.length ? `\n${extraBlocks.join("\n\n")}\n` : ""
+  });
+}
+
+async function handleImplement(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["model", "effort", "cwd", "plan-file", "sandbox", "max-turns", "title"],
+    repeatableOptions: ["verify"],
+    booleanOptions: ["json", "background", "resume-last", "resume", "fresh", "no-subagents", "read-only"],
+    aliasMap: {
+      m: "model"
+    }
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const workspaceRoot = resolveCommandWorkspace(options);
+  const model = normalizeRequestedModel(options.model);
+  const effort = normalizeReasoningEffort(options.effort);
+  const maxTurns = normalizeMaxTurns(options["max-turns"]);
+  const sandbox = normalizeSandboxProfile(options.sandbox, null);
+  const resumeLast = Boolean(options["resume-last"] || options.resume);
+  if (resumeLast && options.fresh) {
+    throw new Error("Choose either --resume/--resume-last or --fresh.");
+  }
+
+  const plan = String(readPlanInput(cwd, options, positionals) ?? "").trim();
+  if (!plan) {
+    throw new Error("Provide the plan as text, via --plan-file <path>, or on stdin.");
+  }
+
+  const planTitle = options.title?.trim() || derivePlanTitle(plan);
+  const title = resumeLast ? "Grok Implement Follow-up" : "Grok Implement";
+  const prompt = buildImplementPrompt(plan, {
+    followUp: resumeLast,
+    noSubagents: Boolean(options["no-subagents"]),
+    verifyCommands: options.verify ?? []
+  });
+  const write = !options["read-only"];
+  const request = {
+    cwd,
+    model,
+    effort,
+    maxTurns,
+    sandbox,
+    prompt,
+    write,
+    resumeLast,
+    kind: "implement",
+    title,
+    summary: planTitle
+  };
+  const taskMetadata = buildTaskRunMetadata({ prompt, resumeLast, title, summary: planTitle });
+
+  ensureGrokAvailable(cwd);
+  const job = buildTaskJob(workspaceRoot, taskMetadata, request);
+  fs.writeFileSync(resolveJobPlanFile(workspaceRoot, job.id), `${plan}\n`, "utf8");
+
+  if (options.background) {
+    const { payload } = enqueueBackgroundTask(cwd, job, { ...request, jobId: job.id });
+    outputCommandResult(
+      { ...payload, planTitle },
+      `${title} (${planTitle}) started in the background as ${job.id}. Poll with \`status ${job.id} --wait\`, then read \`result ${job.id}\`.\n`,
+      options.json
+    );
+    return;
+  }
+
+  await runForegroundCommand(
+    job,
+    (progress) =>
+      executeTaskRun({
+        ...request,
+        jobId: job.id,
+        onProgress: progress
+      }),
+    { json: options.json }
+  );
 }
 
 function spawnDetachedTaskWorker(cwd, jobId) {
@@ -1086,6 +1218,9 @@ async function main() {
       break;
     case "task":
       await handleTask(argv);
+      break;
+    case "implement":
+      await handleImplement(argv);
       break;
     case "task-worker":
       await handleTaskWorker(argv);

@@ -37,6 +37,7 @@ test("the command directory holds exactly the expected command files", () => {
   assert.deepEqual(files, [
     "adversarial-review.md",
     "cancel.md",
+    "implement.md",
     "rescue.md",
     "result.md",
     "review.md",
@@ -129,4 +130,22 @@ test("no functional plugin file mentions codex or openai", () => {
     .filter((file) => !LEGAL_ATTRIBUTION.has(path.basename(file)))
     .filter((file) => /codex|openai/i.test(fs.readFileSync(file, "utf8")));
   assert.deepEqual(offenders, [], `codex/openai found in: ${offenders.join(", ")}`);
+});
+
+test("implement command runs the plan, launch, wait, verify loop with Grok as the worker", () => {
+  const source = readCommand("implement.md");
+  assert.match(source, /description: Claude plans, Grok implements/);
+  assert.match(source, /Do not implement the change yourself/);
+  assert.match(source, /grok-companion\.mjs" implement --background --title/);
+  assert.match(source, /--verify "<verification command>"/);
+  assert.match(source, /<<'PLAN'/);
+  assert.match(source, /status <job-id> --wait --timeout-ms 540000/);
+  assert.match(source, /timeout: 600000/);
+  assert.match(source, /result <job-id>/);
+  assert.match(source, /--resume-last/);
+  assert.match(source, /--verify-only/);
+  assert.match(source, /Run the plan's verification commands yourself/);
+  assert.match(source, /at most two times per request/);
+  assert.match(source, /Never fix Grok's code silently/);
+  assert.match(source, /\/grok:setup/);
 });
