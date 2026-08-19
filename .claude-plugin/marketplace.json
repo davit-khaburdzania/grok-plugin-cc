@@ -1,0 +1,21 @@
+{
+  "name": "grok-build",
+  "owner": {
+    "name": "Davit Khaburdzania"
+  },
+  "metadata": {
+    "description": "Grok Build plugin for Claude Code: delegate tasks to Grok and run Grok code reviews.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "grok",
+      "description": "Use Grok Build from Claude Code to review code or delegate tasks.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Davit Khaburdzania"
+      },
+      "source": "./plugins/grok"
+    }
+  ]
+}
