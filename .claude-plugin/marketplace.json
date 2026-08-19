@@ -15,6 +15,11 @@
       "author": {
         "name": "Davit Khaburdzania"
       },
+      "homepage": "https://github.com/davit-khaburdzania/grok-plugin-cc",
+      "repository": "https://github.com/davit-khaburdzania/grok-plugin-cc",
+      "license": "Apache-2.0",
+      "keywords": ["grok", "grok-build", "xai", "code-review", "delegation"],
+      "category": "development",
       "source": "./plugins/grok"
     }
   ]
